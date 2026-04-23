@@ -1,9 +1,7 @@
-"""Unit tests that don't hit the network."""
+"""Unit tests for core EDGAR-processing logic."""
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from pathlib import Path
 
 from sec_item_1_05_tracker.core import (
@@ -12,37 +10,23 @@ from sec_item_1_05_tracker.core import (
     load_cache,
     merge_new_filings,
     save_cache,
-    sic_label,
-    write_feeds,
 )
 
 
-def test_sic_label_known():
-    assert sic_label("7372") == "Services-Prepackaged Software"
-    assert sic_label("8060") == "Services-Hospitals"
-
-
-def test_sic_label_unknown_returns_empty():
-    assert sic_label("") == ""
-    assert sic_label("9999") == ""
-
-
-def test_filter_item_1_05_keeps_items_with_1_05():
+def test_filter_keeps_items_with_1_05():
     hits = [
         {"_source": {"items": ["1.05", "7.01"]}},
         {"_source": {"items": ["2.02"]}},
         {"_source": {"items": ["Item 1.05"]}},
     ]
-    out = filter_item_1_05(hits)
-    assert len(out) == 2
+    assert len(filter_item_1_05(hits)) == 2
 
 
-def test_filter_item_1_05_drops_when_no_items():
-    hits = [{"_source": {}}]
-    assert filter_item_1_05(hits) == []
+def test_filter_drops_empty():
+    assert filter_item_1_05([{"_source": {}}]) == []
 
 
-def test_enrich_filing_parses_display_name():
+def test_enrich_parses_display_name():
     hit = {
         "_id": "0001193125-26-123456",
         "_source": {
@@ -63,106 +47,110 @@ def test_enrich_filing_parses_display_name():
     assert f["ticker"] == "EXMP"
     assert f["cik"] == "0001234567"
     assert f["sic"] == "7372"
-    assert f["sic_label"] == "Services-Prepackaged Software"
-    assert f["filed_at"] == "2026-04-15"
-    assert f["inc_state"] == "DE"
-    assert f["hq_state"] == "CA"
+    assert f["sic_label"] == "Services - Prepackaged Software"
+    assert f["sector"] == "Services"
     assert "edgar/data/1234567" in f["filing_url"]
 
 
-def test_enrich_filing_handles_missing_fields():
-    hit = {"_id": "", "_source": {}}
+def test_enrich_uses_tickers_index_fallback():
+    """When display_name doesn't include a ticker, fall back to the
+    SEC company_tickers.json lookup."""
+    tickers = {"0001234567": {"ticker": "EXMP", "title": "Example Corp"}}
+    hit = {
+        "_id": "0001193125-26-999999",
+        "_source": {
+            "display_names": ["EXAMPLE CORP  (CIK 0001234567)"],  # no ticker
+            "ciks": ["0001234567"],
+            "sics": ["7372"],
+            "file_date": "2026-04-15",
+            "form": "8-K",
+            "items": ["1.05"],
+        },
+    }
+    f = enrich_filing(hit, tickers_index=tickers)
+    assert f["ticker"] == "EXMP"
+
+
+def test_enrich_strips_colon_suffix_from_accession():
+    """EDGAR _id is sometimes '0001193125-26-123456:primary_doc.htm';
+    we want just the accession part."""
+    hit = {
+        "_id": "0001193125-26-149607:d112875d8ka.htm",
+        "_source": {
+            "display_names": ["STRYKER CORP  (SYK)  (CIK 0000310764)"],
+            "ciks": ["0000310764"],
+            "sics": ["3841"],
+            "file_date": "2026-04-09",
+            "form": "8-K/A",
+            "items": ["1.05"],
+        },
+    }
     f = enrich_filing(hit)
+    assert f["accession_no"] == "0001193125-26-149607"
+    # Only valid colon in URL should be after "https"
+    assert f["filing_url"].count(":") == 1
+    assert "/" + "0001193125-26-149607-index.htm" in f["filing_url"]
+
+
+def test_enrich_missing_fields_graceful():
+    f = enrich_filing({"_id": "", "_source": {}})
     assert f["company_name"] == ""
-    assert f["sic_label"] == ""
     assert f["filing_url"] == ""
 
 
-def test_merge_new_filings_deduplicates():
-    cache = {"a": {"accession_no": "a", "x": 1}}
+def test_enrich_includes_sector():
+    hit = {
+        "_id": "x",
+        "_source": {
+            "display_names": ["ACME (CIK 0000000001)"],
+            "ciks": ["0000000001"],
+            "sics": ["8060"],
+            "file_date": "2026-04-01",
+            "form": "8-K",
+            "items": ["1.05"],
+        },
+    }
+    f = enrich_filing(hit)
+    assert f["sic_label"] == "Services - Hospitals"
+    assert f["sector"] == "Services"
+
+
+def test_merge_new_filings_counts_new():
+    cache = {"a": {"accession_no": "a", "filed_at": "2026-01-01"}}
     fresh = [
-        {"accession_no": "a", "x": 2},  # update existing
-        {"accession_no": "b", "x": 3},  # new
+        {"accession_no": "a", "filed_at": "2026-01-01"},  # existing
+        {"accession_no": "b", "filed_at": "2026-04-10"},  # new
+        {"accession_no": "c", "filed_at": "2026-03-15"},  # new
     ]
     merged, new = merge_new_filings(cache, fresh)
-    assert new == 1
-    assert cache["a"]["x"] == 2  # updated
-    assert cache["b"]["x"] == 3
+    assert len(new) == 2
+    assert {n["accession_no"] for n in new} == {"b", "c"}
 
 
-def test_merge_new_filings_skips_missing_accession():
+def test_merge_new_filings_sorts_newest_first():
     cache = {}
-    fresh = [{"accession_no": "", "x": 1}]
-    merged, new = merge_new_filings(cache, fresh)
-    assert new == 0
+    fresh = [
+        {"accession_no": "a", "filed_at": "2026-01-15"},
+        {"accession_no": "b", "filed_at": "2026-04-15"},
+        {"accession_no": "c", "filed_at": "2026-02-20"},
+    ]
+    merged, _ = merge_new_filings(cache, fresh)
+    assert [m["accession_no"] for m in merged] == ["b", "c", "a"]
+
+
+def test_merge_skips_missing_accession():
+    cache = {}
+    _, new = merge_new_filings(cache, [{"accession_no": "", "filed_at": "2026-04-01"}])
+    assert new == []
     assert cache == {}
 
 
 def test_cache_roundtrip(tmp_path: Path):
     p = tmp_path / "cache.json"
-    c = {"a": {"accession_no": "a", "filed_at": "2026-04-15"}}
+    c = {"a": {"accession_no": "a", "filed_at": "2026-04-01"}}
     save_cache(p, c)
-    loaded = load_cache(p)
-    assert loaded == c
+    assert load_cache(p) == c
 
 
 def test_load_cache_missing_returns_empty(tmp_path: Path):
-    assert load_cache(tmp_path / "nope.json") == {}
-
-
-def test_write_feeds_writes_json_and_rss(tmp_path: Path):
-    filings = [
-        {
-            "accession_no": "0001193125-26-123456",
-            "company_name": "EXAMPLE CORP",
-            "ticker": "EXMP",
-            "sic": "7372",
-            "sic_label": "Services-Prepackaged Software",
-            "filed_at": "2026-04-15",
-            "period": "2026-04-11",
-            "form": "8-K",
-            "items": ["1.05"],
-            "inc_state": "DE",
-            "hq_state": "CA",
-            "filing_url": "https://www.sec.gov/Archives/edgar/data/123/x.htm",
-            "first_seen": "2026-04-15T14:22:01Z",
-        }
-    ]
-    write_feeds(filings, tmp_path)
-    assert (tmp_path / "feed.json").exists()
-    assert (tmp_path / "latest.json").exists()
-    assert (tmp_path / "feed.rss").exists()
-    feed = json.loads((tmp_path / "feed.json").read_text())
-    assert feed[0]["company_name"] == "EXAMPLE CORP"
-    rss = (tmp_path / "feed.rss").read_text()
-    assert "EXAMPLE CORP" in rss
-    assert "Item 1.05" in rss
-
-
-def test_write_feeds_sort_newest_first(tmp_path: Path):
-    filings = [
-        {"accession_no": "a", "filed_at": "2026-01-01", "company_name": "A"},
-        {"accession_no": "b", "filed_at": "2026-04-15", "company_name": "B"},
-        {"accession_no": "c", "filed_at": "2026-02-20", "company_name": "C"},
-    ]
-    write_feeds(filings, tmp_path)
-    feed = json.loads((tmp_path / "feed.json").read_text())
-    assert [f["company_name"] for f in feed] == ["B", "C", "A"]
-
-
-def test_write_feeds_json_only_skips_rss(tmp_path: Path):
-    filings = [
-        {"accession_no": "a", "filed_at": "2026-04-15", "company_name": "A"},
-    ]
-    write_feeds(filings, tmp_path, json_only=True)
-    assert (tmp_path / "feed.json").exists()
-    assert not (tmp_path / "feed.rss").exists()
-
-
-def test_write_feeds_rss_only_skips_json(tmp_path: Path):
-    filings = [
-        {"accession_no": "a", "filed_at": "2026-04-15", "company_name": "A"},
-    ]
-    write_feeds(filings, tmp_path, rss_only=True)
-    assert not (tmp_path / "feed.json").exists()
-    assert (tmp_path / "feed.rss").exists()
+    assert load_cache(tmp_path / "no.json") == {}

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "valtik-sec-item-1-05-tracker"
-version = "0.1.0"
-description = "Track every SEC Form 8-K Item 1.05 (Material Cybersecurity Incidents) filing via EDGAR full-text search. JSON/RSS feed output. Zero API-key required."
+version = "0.2.0"
+description = "Track every SEC Form 8-K Item 1.05 (Material Cybersecurity Incidents) filing via EDGAR. Body extraction, incident-fact flags (ransomware, data-access, containment, forensic firm, law enforcement, materiality), authoritative CIK→ticker lookup, JSON/RSS/CSV/HTML dashboard outputs, Slack/Discord webhook notifications, amendment-family grouping. Zero API-key required."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

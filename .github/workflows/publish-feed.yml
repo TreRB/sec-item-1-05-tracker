@@ -1,0 +1,62 @@
+name: "Example: Publish SEC 8-K Item 1.05 feed to Pages"
+
+# Copy this into your own repo to auto-publish a live JSON / RSS / HTML
+# dashboard of Item 1.05 filings to GitHub Pages. Optionally posts to a
+# Slack channel on every new filing. Configure these secrets:
+#
+#   SLACK_WEBHOOK_URL  - optional; if set, fires a webhook on new filings
+#
+# Enable GitHub Pages on the repo, set Source to the `gh-pages` branch.
+
+on:
+  schedule:
+    - cron: "0 */3 * * *"  # every 3 hours
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          path: public
+        continue-on-error: true  # first run has no gh-pages branch
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install tracker
+        run: pip install valtik-sec-item-1-05-tracker
+
+      - name: Restore cache
+        run: |
+          mkdir -p ~/.sec-item-1-05-tracker
+          if [ -f public/cache.json ]; then
+            cp public/cache.json ~/.sec-item-1-05-tracker/cache.json
+          fi
+
+      - name: Generate feeds
+        run: |
+          mkdir -p public
+          sec-item-1-05-tracker \
+            --since "$(date -d '90 days ago' '+%Y-%m-%d')" \
+            --output-dir public \
+            --format json,rss,csv,html \
+            --fetch-bodies \
+            --webhook "${{ secrets.SLACK_WEBHOOK_URL }}" \
+            --verbose
+
+      - name: Persist cache
+        run: |
+          cp ~/.sec-item-1-05-tracker/cache.json public/cache.json || true
+
+      - name: Deploy to gh-pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./public
