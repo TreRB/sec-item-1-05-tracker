@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "valtik-sec-item-1-05-tracker"
+version = "0.1.0"
+description = "Track every SEC Form 8-K Item 1.05 (Material Cybersecurity Incidents) filing via EDGAR full-text search. JSON/RSS feed output. Zero API-key required."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Valtik Studios LLC", email = "Tretrebucchi@icloud.com" },
+]
+keywords = [
+    "sec",
+    "edgar",
+    "8-k",
+    "item-1.05",
+    "cybersecurity-disclosure",
+    "material-incident",
+    "breach-tracker",
+    "compliance",
+    "public-company",
+    "governance",
+    "rss",
+    "feed",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Office/Business :: Financial",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.urls]
+Homepage = "https://valtikstudios.com"
+Repository = "https://github.com/TreRB/sec-item-1-05-tracker"
+Issues = "https://github.com/TreRB/sec-item-1-05-tracker/issues"
+Blog = "https://valtikstudios.com/blog/sec-8k-item-1-05-two-years-in-what-filings-actually-say"
+
+[project.scripts]
+sec-item-1-05-tracker = "sec_item_1_05_tracker.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra"
